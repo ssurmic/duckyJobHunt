@@ -1,0 +1,15 @@
+node_modules/
+dist/
+output/
+.env
+.trigger/
+*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+!.vscode/settings.json
+.idea/
