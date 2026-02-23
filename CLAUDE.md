@@ -1,3 +1,159 @@
+<!-- PROJECT-SPECIFIC INSTRUCTIONS START -->
+
+# Ducky Job Hunt — Agent Instructions
+
+## What This Project Is
+
+An automated job application engine built on Trigger.dev v4. It runs daily (9 AM UTC cron), scrapes Indeed jobs via Apify, AI-filters them with Gemini 2.5 Flash, tailors resumes with Claude Sonnet 4, generates PDFs, and logs everything to Google Sheets.
+
+## Architecture
+
+```
+Trigger.dev (orchestrator)
+  └── daily-job-hunt (cron 9AM UTC)
+        ├── Apify Indeed scraper → ~20 raw jobs
+        │     └── blacklistedCompanies filtered out here
+        └── for each job:
+              └── process-single-job (child task)
+                    ├── Gemini 2.5 Flash → filter (pass/fail, score 0-100)
+                    ├── Claude Sonnet 4 → tailor resume + cover letter
+                    ├── pdf-lib → generate PDF
+                    └── Google Sheets → append row (11 columns)
+```
+
+## Key Files
+
+| File | Purpose | When to modify |
+|------|---------|---------------|
+| `config/userProfile.ts` | **Knowledge base** — identity, experience, skills, preferences, blacklist | Change job search params, add experience, block companies |
+| `src/lib/scraper.ts` | Apify wrapper (Indeed jobs scraper, actor `hMvNSpz3JnHgl5jkh`) | Change scraping actor or search params |
+| `src/lib/filter.ts` | Gemini 2.5 Flash job filtering | Change filtering model, scoring logic, or prompt |
+| `src/lib/tailor.ts` | Claude Sonnet 4 resume tailoring | Change tailoring model, resume format, or prompt |
+| `src/lib/pdfGenerator.ts` | Markdown → PDF via pdf-lib | Change PDF layout, fonts, styling |
+| `src/lib/sheets.ts` | Google Sheets append helper (11 columns) | Change columns or sheet structure |
+| `src/trigger/dailyJobHunt.ts` | Main Trigger.dev workflow (3 tasks) | Change pipeline flow, add tasks, modify schedule |
+| `trigger.config.ts` | Trigger.dev v4 project config | Change project ref, retries, build extensions |
+| `DEVELOPMENT.md` | Known issues, fixes, architecture decisions | Check here first when debugging |
+
+## Knowledge Base — `config/userProfile.ts`
+
+This is the **single source of truth** for who you are. Everything the AI uses to filter jobs and tailor resumes comes from this file.
+
+### What to configure:
+
+- **identity** — name, email, phone, LinkedIn, portfolio, location
+- **preferences.jobTitles** — target roles (e.g., `["Software Engineer", "AI Engineer"]`)
+- **preferences.seniority** — target levels (e.g., `["Mid", "Senior", "Staff"]`)
+- **preferences.locations** — where you want to work (e.g., `["San Francisco, CA", "Remote"]`)
+- **preferences.blacklistedCompanies** — companies to skip (e.g., `["Amazon", "Meta"]`). Uses case-insensitive substring match, so `"Amazon"` catches "Amazon Development Center U.S., Inc." too
+- **preferences.requireH1bSponsorship** — if `true`, jobs that explicitly say "no sponsorship" get scored 0
+- **preferences.minSalary** — minimum salary threshold
+- **experience** — each role with 5-10 bullet points (the AI picks the most relevant per job)
+- **skills** — categorized (Languages, Frontend, Backend, Infrastructure, etc.)
+- **projects** — side projects, open source
+- **education** — degrees
+- **coverLetterTemplate** — template with `{{placeholders}}`
+
+### Blacklist behavior:
+
+Companies in `blacklistedCompanies` are filtered **at the scraper level** — they never reach the AI filter or tailor. This saves API costs and prevents wasting compute on companies you've already applied to or have referrals for.
+
+## Task IDs
+
+- `daily-job-hunt` — Scheduled cron task (parent)
+- `manual-job-hunt` — On-demand task with payload overrides
+- `process-single-job` — Child task processing one job
+
+## Environment Variables (in .env, gitignored)
+
+| Variable | Service | Purpose |
+|----------|---------|---------|
+| `TRIGGER_SECRET_KEY` | Trigger.dev | Workflow orchestration |
+| `APIFY_TOKEN` | Apify | Indeed job scraping |
+| `GEMINI_API_KEY` | Google AI | Cheap/fast job filtering (Gemini 2.5 Flash) |
+| `ANTHROPIC_API_KEY` | Anthropic | Resume tailoring (Claude Sonnet 4) |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Google Cloud | Service account JSON for Sheets API |
+| `GOOGLE_SHEET_ID` | Google Sheets | Target spreadsheet ID |
+
+## Trigger.dev Project
+
+- **Project ref**: Set in `trigger.config.ts` (replace the placeholder after creating your project at [cloud.trigger.dev](https://cloud.trigger.dev))
+- **Service account email**: Found in your downloaded Google Cloud JSON key under `client_email`
+
+## Google Sheets Columns (11 total)
+
+Date | Company | Role | Location | Salary | Job Type | Match Score | Match Reason | Status | Job URL | Resume Path
+
+## Code Conventions
+
+- All AI calls return structured JSON; always strip markdown fences before parsing
+- Filter uses Gemini 2.5 Flash (cheap); tailor uses Claude Sonnet 4 (quality)
+- Apify Indeed actor expects `position` (NOT `title`) as the search input field
+- Errors in individual jobs should NOT crash the pipeline — log and continue
+- Google Sheets writes are fire-and-forget — don't throw on sheet failures
+- `triggerAndWait` returns a `Result` object — always check `result.ok` before accessing `result.output`
+- Never wrap `triggerAndWait` or `wait` in `Promise.all`
+- PDFs are saved to `output/resumes/` (gitignored)
+
+## Agent Instructions: Helping Users Set Up Their Profile
+
+When a user asks you to help them fill in their profile, or when you detect `config/userProfile.ts` still has placeholder data ("Your Name", "Acme Inc.", "you@example.com"), follow this process:
+
+1. **Read `config/userProfile.ts`** to see what's currently filled in vs placeholder
+2. **Ask the user** for their info. They may:
+   - Paste their resume text directly
+   - Share a PDF resume (read it with the Read tool)
+   - Describe their background verbally
+   - Ask you to use info from a local file
+3. **Fill in every field** in `defaultProfile` using the Zod schema as the type guide:
+   - `identity` — name, email, phone, LinkedIn, portfolio, location
+   - `preferences.jobTitles` — what roles they want (keep broad: "Software Engineer" not "Senior Software Engineer II")
+   - `preferences.seniority` — target levels (typically `["Mid", "Senior", "Staff"]`)
+   - `preferences.locations` — where they want to work (include "Remote" if applicable)
+   - `preferences.requireH1bSponsorship` — `true` if they need visa sponsorship
+   - `preferences.blacklistedCompanies` — companies to skip (already applied, have referrals, etc.)
+   - `experience` — each role with **5-10 bullet points**. Quantified achievements are best. The AI selects the most relevant per job, so more bullets = better tailoring
+   - `skills` — categorized (Languages, Frontend, Backend, Infrastructure, Databases, AI/ML, etc.)
+   - `projects` — side projects, open source, hackathons with technologies
+   - `education` — degrees with institution and graduation date
+   - `coverLetterTemplate` — keep the `{{placeholder}}` syntax; the AI fills them in per job
+4. **Validate** by calling `validateUserConfig(defaultProfile)` mentally — make sure all required fields are present and arrays have the right minimum lengths (e.g., `bullets` needs 3-10 items)
+5. **Never fabricate experience**. Only reword what the user provides. If info is missing, ask for it.
+
+### Profile quality checklist
+
+- [ ] Every experience role has 5-10 strong, quantified bullets
+- [ ] Skills cover all categories relevant to the user
+- [ ] Job titles are broad enough to catch results (not overly specific)
+- [ ] Locations include all target cities + "Remote" if applicable
+- [ ] Blacklist includes companies to skip
+- [ ] Cover letter template has all `{{placeholders}}`
+
+## Adding a New User
+
+1. Create `config/user2Profile.ts` (copy from `userProfile.ts`)
+2. Create a new scheduled task in `src/trigger/` importing the new profile
+3. Each user gets their own cron, Google Sheet, preferences, and blacklist
+
+## Running Locally
+
+```bash
+npx trigger dev
+```
+
+Then trigger `manual-job-hunt` from the Trigger.dev dashboard with test payload:
+```json
+{ "maxResults": 3, "jobTitles": ["Software Engineer"], "locations": ["San Francisco, CA"] }
+```
+
+## Deploying
+
+```bash
+npx trigger deploy
+```
+
+<!-- PROJECT-SPECIFIC INSTRUCTIONS END -->
+
 <!-- TRIGGER.DEV basic START -->
 # Trigger.dev Basic Tasks (v4)
 

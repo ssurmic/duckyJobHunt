@@ -114,10 +114,16 @@ Generate a JSON response with EXACTLY this structure (no markdown fences):
       messages: [{ role: "user", content: prompt }],
     });
 
-    const text =
+    const rawText =
       response.content[0].type === "text" ? response.content[0].text : "";
 
-    const parsed = JSON.parse(text.trim());
+    // Strip markdown fences if the model wraps the response
+    const text = rawText
+      .trim()
+      .replace(/^```(?:json)?\n?/g, "")
+      .replace(/\n?```$/g, "");
+
+    const parsed = JSON.parse(text);
 
     logger.info("Resume tailored", {
       job: `${job.title} @ ${job.company}`,

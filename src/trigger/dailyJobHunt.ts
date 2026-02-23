@@ -4,7 +4,7 @@ import { scrapeJobs, type ScrapedJob } from "../lib/scraper.js";
 import { filterJob } from "../lib/filter.js";
 import { tailorResume } from "../lib/tailor.js";
 import { generateResumePdf } from "../lib/pdfGenerator.js";
-import { appendRow, initializeSheet, type SheetRow } from "../lib/sheets.js";
+import { appendRow, initializeSheet, getExistingJobUrls, type SheetRow } from "../lib/sheets.js";
 
 // ── Child Task: Process a Single Job ─────────────────────────────────────────
 
@@ -36,18 +36,7 @@ export const processJob = task({
         reason: filterResult.reason,
       });
 
-      // Still log it to sheets as "Filtered Out"
-      await appendRow({
-        date: today,
-        company: job.company,
-        role: job.title,
-        location: job.location,
-        matchScore: filterResult.score,
-        matchReason: filterResult.reason,
-        status: "Filtered Out",
-        jobUrl: job.url,
-        resumePath: "",
-      });
+      // Skip writing to sheet — only "Ready to Apply" jobs go in the tracker
 
       return {
         status: "filtered_out" as const,
@@ -64,11 +53,50 @@ export const processJob = task({
       score: filterResult.score,
     });
 
-    const tailored = await tailorResume(job, userConfig);
+    let tailored: Awaited<ReturnType<typeof tailorResume>>;
+    try {
+      tailored = await tailorResume(job, userConfig);
+    } catch (error) {
+      logger.error("Tailoring threw unexpectedly", {
+        job: `${job.title} @ ${job.company}`,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Still log the match to the sheet so the user can apply manually
+      await appendRow({
+        date: today,
+        company: job.company,
+        role: job.title,
+        location: job.location,
+        salary: job.salary || "",
+        jobType: job.jobType || "",
+        matchScore: filterResult.score,
+        matchReason: filterResult.reason,
+        status: "Ready to Apply",
+        jobUrl: job.url,
+        resumePath: "TAILOR_FAILED",
+      });
+      return {
+        status: "ready_to_apply" as const,
+        job: `${job.title} @ ${job.company}`,
+        score: filterResult.score,
+        resumePath: "TAILOR_FAILED",
+        coverLetterPreview: "",
+      };
+    }
 
     // Step 3: Generate PDF
-    const sanitizedName = `${userConfig.identity.name.replace(/\s+/g, "_")}_${job.company.replace(/\s+/g, "_")}_${job.title.replace(/\s+/g, "_")}`;
-    const pdf = await generateResumePdf(tailored.markdown, sanitizedName);
+    let resumePath = "PDF_FAILED";
+    try {
+      const sanitizedName = `${userConfig.identity.name.replace(/\s+/g, "_")}_${job.company.replace(/\s+/g, "_")}_${job.title.replace(/\s+/g, "_")}`;
+      const pdf = await generateResumePdf(tailored.markdown, sanitizedName);
+      resumePath = pdf.filePath;
+    } catch (error) {
+      logger.error("PDF generation failed", {
+        job: `${job.title} @ ${job.company}`,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Continue — the job still gets logged to the sheet
+    }
 
     // Step 4: Log to Google Sheets
     const sheetRow: SheetRow = {
@@ -76,11 +104,13 @@ export const processJob = task({
       company: job.company,
       role: job.title,
       location: job.location,
+      salary: job.salary || "",
+      jobType: job.jobType || "",
       matchScore: filterResult.score,
       matchReason: filterResult.reason,
       status: "Ready to Apply",
       jobUrl: job.url,
-      resumePath: pdf.filePath,
+      resumePath,
     };
 
     await appendRow(sheetRow);
@@ -89,14 +119,14 @@ export const processJob = task({
       title: job.title,
       company: job.company,
       score: filterResult.score,
-      resumePath: pdf.filePath,
+      resumePath,
     });
 
     return {
       status: "ready_to_apply" as const,
       job: `${job.title} @ ${job.company}`,
       score: filterResult.score,
-      resumePath: pdf.filePath,
+      resumePath,
       coverLetterPreview: tailored.coverLetter.slice(0, 200),
     };
   },
@@ -153,11 +183,30 @@ export const dailyJobHunt = schedules.task({
     }
 
     logger.info("Jobs scraped", { count: jobs.length });
+
+    // Step 3: Cross-run dedup — skip jobs already in the sheet
+    const existingUrls = await getExistingJobUrls();
+    const newJobs = jobs.filter((job) => !existingUrls.has(job.url));
+
+    logger.info("Dedup complete", {
+      before: jobs.length,
+      after: newJobs.length,
+      skipped: jobs.length - newJobs.length,
+    });
+
+    if (newJobs.length === 0) {
+      logger.info("All scraped jobs already exist in sheet");
+      metadata.set("status", "all_duplicates");
+      return { status: "all_duplicates", jobsFound: jobs.length, newJobs: 0 };
+    }
+
+    const dedupedJobs = newJobs;
+
     metadata.set("status", "processing");
-    metadata.set("totalJobs", jobs.length);
+    metadata.set("totalJobs", dedupedJobs.length);
     metadata.set("processedJobs", 0);
 
-    // Step 3: Process each job (sequentially to avoid rate limits)
+    // Step 4: Process each job (sequentially to avoid rate limits)
     const results: Array<{
       status: string;
       job: string;
@@ -165,8 +214,8 @@ export const dailyJobHunt = schedules.task({
       error?: string;
     }> = [];
 
-    for (let i = 0; i < jobs.length; i++) {
-      const job = jobs[i];
+    for (let i = 0; i < dedupedJobs.length; i++) {
+      const job = dedupedJobs[i];
 
       try {
         const result = await processJob.triggerAndWait({
@@ -202,11 +251,11 @@ export const dailyJobHunt = schedules.task({
       metadata.set("processedJobs", i + 1);
       metadata.set(
         "progress",
-        Math.round(((i + 1) / jobs.length) * 100)
+        Math.round(((i + 1) / dedupedJobs.length) * 100)
       );
     }
 
-    // Step 4: Summary
+    // Step 5: Summary
     const readyToApply = results.filter((r) => r.status === "ready_to_apply");
     const filteredOut = results.filter((r) => r.status === "filtered_out");
     const errors = results.filter((r) => r.status === "error");
@@ -217,6 +266,8 @@ export const dailyJobHunt = schedules.task({
       status: "completed",
       duration: `${duration}s`,
       totalScraped: jobs.length,
+      duplicatesSkipped: jobs.length - dedupedJobs.length,
+      newJobsProcessed: dedupedJobs.length,
       readyToApply: readyToApply.length,
       filteredOut: filteredOut.length,
       errors: errors.length,
@@ -283,10 +334,24 @@ export const manualJobHunt = task({
       return { status: "no_jobs", jobsFound: 0 };
     }
 
+    // Cross-run dedup
+    const existingUrls = await getExistingJobUrls();
+    const newJobs = jobs.filter((job) => !existingUrls.has(job.url));
+
+    logger.info("Dedup complete", {
+      before: jobs.length,
+      after: newJobs.length,
+      skipped: jobs.length - newJobs.length,
+    });
+
+    if (newJobs.length === 0) {
+      return { status: "all_duplicates", jobsFound: jobs.length, newJobs: 0 };
+    }
+
     // Process each job
     const results = [];
 
-    for (const job of jobs) {
+    for (const job of newJobs) {
       try {
         const result = await processJob.triggerAndWait({
           job,
@@ -315,6 +380,8 @@ export const manualJobHunt = task({
     return {
       status: "completed",
       totalScraped: jobs.length,
+      duplicatesSkipped: jobs.length - newJobs.length,
+      newJobsProcessed: newJobs.length,
       readyToApply: readyToApply.length,
       results,
     };

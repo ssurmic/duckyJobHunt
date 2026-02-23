@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { sheets_v4, auth as gauth } from "@googleapis/sheets";
 import { logger } from "@trigger.dev/sdk";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -8,9 +8,11 @@ export interface SheetRow {
   company: string;
   role: string;
   location: string;
+  salary: string;
+  jobType: string;
   matchScore: number;
   matchReason: string;
-  status: "Ready to Apply" | "Filtered Out" | "Error";
+  status: "Ready to Apply";
   jobUrl: string;
   resumePath: string;
 }
@@ -29,15 +31,14 @@ function getSheets() {
   }
 
   const credentials = JSON.parse(credentialsJson);
-  const auth = new google.auth.GoogleAuth({
+  const authClient = new gauth.GoogleAuth({
     credentials,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
-  return {
-    sheets: google.sheets({ version: "v4", auth }),
-    sheetId,
-  };
+  const sheets = new sheets_v4.Sheets({ auth: authClient });
+
+  return { sheets, sheetId };
 }
 
 // ── Initialize Sheet Headers ─────────────────────────────────────────────────
@@ -49,31 +50,41 @@ export async function initializeSheet(): Promise<void> {
     // Check if headers exist
     const existing = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: "Sheet1!A1:I1",
+      range: "Sheet1!A1:K1",
     });
 
-    if (!existing.data.values || existing.data.values.length === 0) {
+    const expectedHeaders = [
+      "Date",
+      "Company",
+      "Role",
+      "Location",
+      "Salary",
+      "Job Type",
+      "Match Score",
+      "Match Reason",
+      "Status",
+      "Job URL",
+      "Resume Path",
+    ];
+
+    const currentHeaders = existing.data.values?.[0] ?? [];
+    const needsUpdate =
+      currentHeaders.length !== expectedHeaders.length ||
+      expectedHeaders.some((h, i) => currentHeaders[i] !== h);
+
+    if (needsUpdate) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: sheetId,
-        range: "Sheet1!A1:I1",
+        range: "Sheet1!A1:K1",
         valueInputOption: "RAW",
         requestBody: {
-          values: [
-            [
-              "Date",
-              "Company",
-              "Role",
-              "Location",
-              "Match Score",
-              "Match Reason",
-              "Status",
-              "Job URL",
-              "Resume Path",
-            ],
-          ],
+          values: [expectedHeaders],
         },
       });
-      logger.info("Sheet headers initialized");
+      logger.info("Sheet headers updated", {
+        old: currentHeaders,
+        new: expectedHeaders,
+      });
     }
   } catch (error) {
     logger.warn("Could not initialize sheet headers", {
@@ -90,7 +101,7 @@ export async function appendRow(row: SheetRow): Promise<void> {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
-      range: "Sheet1!A:I",
+      range: "Sheet1!A:K",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [
@@ -99,6 +110,8 @@ export async function appendRow(row: SheetRow): Promise<void> {
             row.company,
             row.role,
             row.location,
+            row.salary,
+            row.jobType,
             row.matchScore,
             row.matchReason,
             row.status,
@@ -124,6 +137,40 @@ export async function appendRow(row: SheetRow): Promise<void> {
   }
 }
 
+// ── Get Existing Job URLs (for cross-run dedup) ─────────────────────────────
+
+export async function getExistingJobUrls(): Promise<Set<string>> {
+  try {
+    const { sheets, sheetId } = getSheets();
+
+    // Job URL is column J (10th column)
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: "Sheet1!J:J",
+    });
+
+    const rows = result.data.values ?? [];
+    const urls = new Set<string>();
+
+    // Skip header row (index 0)
+    for (let i = 1; i < rows.length; i++) {
+      const url = rows[i]?.[0];
+      if (url && typeof url === "string" && url.trim()) {
+        urls.add(url.trim());
+      }
+    }
+
+    logger.info("Loaded existing job URLs for dedup", { count: urls.size });
+    return urls;
+  } catch (error) {
+    logger.warn("Could not load existing job URLs — skipping dedup", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // Return empty set so pipeline continues without dedup
+    return new Set();
+  }
+}
+
 // ── Append Multiple Rows ─────────────────────────────────────────────────────
 
 export async function appendRows(rows: SheetRow[]): Promise<void> {
@@ -134,7 +181,7 @@ export async function appendRows(rows: SheetRow[]): Promise<void> {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
-      range: "Sheet1!A:I",
+      range: "Sheet1!A:K",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: rows.map((row) => [
@@ -142,6 +189,8 @@ export async function appendRows(rows: SheetRow[]): Promise<void> {
           row.company,
           row.role,
           row.location,
+          row.salary,
+          row.jobType,
           row.matchScore,
           row.matchReason,
           row.status,

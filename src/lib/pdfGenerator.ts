@@ -29,7 +29,16 @@ export async function generateResumePdf(
   markdownContent: string,
   fileName: string
 ): Promise<PdfResult> {
-  const doc = await PDFDocument.create();
+  let doc: PDFDocument;
+  try {
+    doc = await PDFDocument.create();
+  } catch (error) {
+    logger.error("Failed to create PDF document", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+
   const helvetica = await doc.embedFont(StandardFonts.Helvetica);
   const helveticaBold = await doc.embedFont(StandardFonts.HelveticaBold);
 
@@ -123,10 +132,18 @@ export async function generateResumePdf(
   const fullFileName = `${safeName}.pdf`;
   const filePath = join(OUTPUT_DIR, fullFileName);
 
-  await mkdir(OUTPUT_DIR, { recursive: true });
-  await writeFile(filePath, pdfBytes);
-
-  logger.info("PDF generated", { filePath, size: pdfBytes.length });
+  try {
+    await mkdir(OUTPUT_DIR, { recursive: true });
+    await writeFile(filePath, pdfBytes);
+    logger.info("PDF generated", { filePath, size: pdfBytes.length });
+  } catch (error) {
+    // In cloud environments the filesystem may be read-only or ephemeral.
+    // Still return the bytes so the pipeline can continue.
+    logger.warn("Could not write PDF to disk (cloud deploy?)", {
+      filePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   return {
     filePath,

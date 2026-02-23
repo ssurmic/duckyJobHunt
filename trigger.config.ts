@@ -1,7 +1,8 @@
 import { defineConfig } from "@trigger.dev/sdk";
 
 export default defineConfig({
-  project: "proj_duckyJobHunt",
+  // Replace with your Trigger.dev project ref (from https://cloud.trigger.dev)
+  project: "proj_YOUR_PROJECT_REF",
   dirs: ["./src/trigger"],
   runtime: "node",
   logLevel: "info",
@@ -15,7 +16,7 @@ export default defineConfig({
       randomize: true,
     },
   },
-  maxDuration: 300,
+  maxDuration: 900, // 15 minutes — scraping 6 titles takes ~6-8 min, plus filter/tailor
   build: {
     autoDetectExternal: true,
     extensions: [],

@@ -24,8 +24,10 @@ const SkillCategorySchema = z.object({
 
 const PreferencesSchema = z.object({
   jobTitles: z.array(z.string()),
+  seniority: z.array(z.string()).default(["Mid", "Senior", "Staff"]),
   locations: z.array(z.string()),
   remoteOnly: z.boolean().default(false),
+  requireH1bSponsorship: z.boolean().default(false),
   minSalary: z.number().optional(),
   maxJobAgeDays: z.number().default(7),
   blacklistedCompanies: z.array(z.string()).default([]),
@@ -72,49 +74,70 @@ export function validateUserConfig(config: unknown): UserConfig {
 
 // ── Default Profile (fill in your details) ───────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REPLACE THIS EXAMPLE DATA WITH YOUR REAL INFO
+//
+// Fastest way: paste your resume into an AI assistant and ask it to fill this in.
+// See README.md § "Set up your knowledge base" for a copy-paste prompt.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const defaultProfile: UserConfig = {
   id: "user-001",
   identity: {
-    name: "Your Name",
-    email: "you@example.com",
-    phone: "+1-555-000-0000",
-    linkedinUrl: "https://linkedin.com/in/yourprofile",
-    portfolioUrl: "https://yourportfolio.dev",
+    name: "Jane Doe",
+    email: "jane.doe@example.com",
+    phone: "+1-555-123-4567",
+    linkedinUrl: "https://linkedin.com/in/janedoe",
+    portfolioUrl: "https://janedoe.dev",
     location: "San Francisco, CA",
   },
   preferences: {
-    jobTitles: ["Software Engineer", "Full Stack Developer", "Backend Engineer"],
-    locations: ["San Francisco, CA", "Remote"],
+    jobTitles: [
+      "Software Engineer",
+      "Backend Engineer",
+      "Full Stack Engineer",
+      "Platform Engineer",
+    ],
+    seniority: ["Mid", "Senior", "Staff"],
+    locations: [
+      "San Francisco, CA",
+      "Seattle, WA",
+      "New York, NY",
+      "Remote",
+    ],
     remoteOnly: false,
+    requireH1bSponsorship: false,
     minSalary: 120000,
     maxJobAgeDays: 7,
-    blacklistedCompanies: ["SpamCorp"],
+    blacklistedCompanies: [
+      // Add companies you want to skip (current employer, already applied, etc.)
+      // "CurrentEmployer",
+    ],
   },
   experience: [
     {
-      company: "Acme Inc.",
+      company: "Acme Corp",
       role: "Senior Software Engineer",
-      startDate: "2022-01",
+      startDate: "Jan 2022",
       endDate: "Present",
       bullets: [
-        "Led migration of monolithic Node.js API to microservices architecture, reducing deploy times by 70%",
+        "Led migration of monolithic API to microservices architecture, reducing deploy times by 70%",
         "Built real-time data pipeline processing 2M+ events/day using Kafka and TypeScript",
         "Implemented CI/CD pipeline with GitHub Actions, achieving 99.9% deployment success rate",
         "Mentored team of 4 junior engineers, establishing code review culture and engineering standards",
-        "Designed and shipped OAuth2/OIDC authentication system serving 50K+ users",
+        "Designed OAuth2/OIDC authentication system serving 50K+ active users",
       ],
     },
     {
       company: "StartupXYZ",
       role: "Software Engineer",
-      startDate: "2020-03",
-      endDate: "2021-12",
+      startDate: "Mar 2020",
+      endDate: "Dec 2021",
       bullets: [
-        "Built full-stack features using React, Node.js, and PostgreSQL for B2B SaaS platform",
-        "Reduced API response times by 60% through query optimization and Redis caching",
-        "Developed automated testing suite covering 85% of codebase with Jest and Cypress",
-        "Shipped Stripe integration handling $2M+ in annual recurring revenue",
-        "Created internal CLI tooling that cut developer onboarding time from 2 days to 2 hours",
+        "Built full-stack features using React, Node.js, and PostgreSQL for a B2B SaaS platform",
+        "Reduced API response times by 60% through query optimization and Redis caching layer",
+        "Developed automated testing suite with 85% code coverage using Jest and Cypress",
+        "Shipped Stripe billing integration handling $2M+ in annual recurring revenue",
       ],
     },
   ],
@@ -123,19 +146,19 @@ export const defaultProfile: UserConfig = {
       institution: "University of California, Berkeley",
       degree: "B.S.",
       field: "Computer Science",
-      graduationDate: "2020",
+      graduationDate: "May 2020",
     },
   ],
   projects: [
     {
-      name: "OpenSource CLI Tool",
+      name: "Open-Source CLI Tool",
       description:
-        "A developer productivity CLI with 500+ GitHub stars that automates common workflows.",
+        "Developer productivity CLI with 500+ GitHub stars that automates common workflows.",
       technologies: ["TypeScript", "Node.js", "Commander.js"],
-      url: "https://github.com/you/cli-tool",
+      url: "https://github.com/janedoe/cli-tool",
     },
     {
-      name: "Real-time Dashboard",
+      name: "Real-Time Dashboard",
       description:
         "WebSocket-powered monitoring dashboard for distributed systems with custom alerting.",
       technologies: ["React", "D3.js", "WebSockets", "Go"],

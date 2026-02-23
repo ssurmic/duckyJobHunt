@@ -1,9 +1,20 @@
 node_modules/
 dist/
 output/
-.env
-.trigger/
 *.pdf
+
+# Secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# Claude Code local settings (may contain allowed commands with tokens)
+.claude/settings.local.json
+
+# Trigger.dev build artifacts
+.trigger/
 
 # OS files
 .DS_Store
